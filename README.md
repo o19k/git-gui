@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/o19k/git-gui/main/install.sh | sh
 That fetches the binary for your platform, checks it against the published SHA-256 and
 puts it in `/usr/local/bin` if you can write there or `~/.local/bin` if you cannot. It
 never uses `sudo`: a script piped in from the network should not be the thing that decides
-to run as root. Pick the version or the destination yourself with `VERSION=v1.2.3` and
+to run as root. Pick the version or the destination yourself with `VERSION=v0.2.0` and
 `BINDIR=~/bin`.
 
 If piping a script into a shell makes you uneasy — a reasonable instinct — read it first
