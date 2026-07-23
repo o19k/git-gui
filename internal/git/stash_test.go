@@ -49,7 +49,7 @@ func stashRepo(t *testing.T) *Repo {
 	if err := repo.StageAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "add both"); err != nil {
+	if err := repo.Commit(ctx, "add both", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -58,7 +58,7 @@ func stashRepo(t *testing.T) *Repo {
 			t.Fatal(err)
 		}
 	}
-	if err := repo.StashPush(ctx, "wip"); err != nil {
+	if err := repo.StashPush(ctx, StashOpts{Message: "wip", Untracked: true}); err != nil {
 		t.Fatal(err)
 	}
 	return repo
@@ -86,7 +86,7 @@ func TestStashFileDiffIsScopedToOnePath(t *testing.T) {
 	// `stash show` rejects a pathspec, so this must not be built on it.
 	repo := stashRepo(t)
 
-	patch, err := repo.StashFileDiff(context.Background(), "stash@{0}", "f.txt")
+	patch, err := repo.StashFileDiff(context.Background(), "stash@{0}", "f.txt", DiffOpts{})
 	if err != nil {
 		t.Fatalf("StashFileDiff: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestCommitFilesListsWhatTheCommitTouched(t *testing.T) {
 	if err := repo.StageAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "add x and y"); err != nil {
+	if err := repo.Commit(ctx, "add x and y", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +190,7 @@ func TestCommitFilesListsWhatTheCommitTouched(t *testing.T) {
 		}
 	}
 
-	patch, err := repo.CommitFileDiff(ctx, sha, "x.txt")
+	patch, err := repo.CommitFileDiff(ctx, sha, "x.txt", DiffOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}

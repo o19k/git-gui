@@ -69,7 +69,7 @@ func TestEndToEndExplorer(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	// Open the Explorer and let its index arrive.
@@ -222,7 +222,7 @@ func TestEndToEndExplorerDiskFallbackAndPreviews(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	m, cmd := press(t, m, "4")
@@ -364,7 +364,7 @@ func TestEndToEndExplorerStaysCurrentAndStopsAtSubmodules(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	m, cmd := press(t, m, "4")
@@ -474,7 +474,7 @@ func TestTheExplorerLeavesLocalChangesAlone(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	// Local Changes, showing a diff and annotating the file.
@@ -553,7 +553,7 @@ func TestTheDeleteQuestionSaysWhenGitHoldsNoCopy(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 	m, cmd := press(t, m, "4")
 	m = drain(t, m, cmd)
@@ -634,7 +634,7 @@ func TestALongFileIsPreviewedUpToItsCap(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 	m, cmd := press(t, m, "4")
 	m = drain(t, m, cmd)
@@ -686,7 +686,7 @@ func TestASourceFilePreviewsColoured(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 	m, cmd := press(t, m, "4")
 	m = drain(t, m, cmd)
@@ -822,7 +822,7 @@ func TestTheChosenPreviewSurvivesTheSnapshotPoll(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 	m, cmd := press(t, m, "4")
 	m = drain(t, m, cmd)
@@ -842,7 +842,7 @@ func TestTheChosenPreviewSurvivesTheSnapshotPoll(t *testing.T) {
 		t.Errorf("the history does not hold the commit that touched the file: %q", m.previewContent)
 	}
 
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	if m.previewFor.kind != previewHistory {
@@ -889,7 +889,7 @@ func TestThePreviewScrollSurvivesTheSnapshotPoll(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 	m, cmd := press(t, m, "4")
 	m = drain(t, m, cmd)
@@ -904,7 +904,7 @@ func TestThePreviewScrollSurvivesTheSnapshotPoll(t *testing.T) {
 		t.Fatal("the preview did not scroll")
 	}
 
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	if m.previewOffset != scrolled {

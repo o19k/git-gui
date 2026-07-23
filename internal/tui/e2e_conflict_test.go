@@ -64,7 +64,7 @@ func TestEndToEndConflict(t *testing.T) {
 	m = next.(Model)
 	reload := func(m Model) Model {
 		t.Helper()
-		next, _ := m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+		next, _ := m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 		return next.(Model)
 	}
 	m = reload(m)

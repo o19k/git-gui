@@ -96,6 +96,20 @@ func (m Model) branches() []git.Branch {
 	return out
 }
 
+func (m Model) worktrees() []git.Worktree {
+	f := m.filter[PanelWorktrees]
+	if f == "" {
+		return m.snap.Worktrees
+	}
+	out := make([]git.Worktree, 0, len(m.snap.Worktrees))
+	for _, e := range m.snap.Worktrees {
+		if matches(f, e.Name()) || matches(f, e.Path) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func (m Model) commits() []git.Commit {
 	f := m.filter[PanelCommits]
 	if f == "" {

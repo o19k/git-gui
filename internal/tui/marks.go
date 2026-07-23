@@ -54,6 +54,19 @@ func (m Model) markedFiles() []git.FileChange {
 	return nil
 }
 
+// explicitMarks is what was marked by hand, in a stable order, and nothing
+// when nothing was.
+func (m Model) explicitMarks() []string {
+	var marked []string
+	for path, on := range m.fileMarks {
+		if on {
+			marked = append(marked, path)
+		}
+	}
+	sort.Strings(marked)
+	return marked
+}
+
 // paths is the marked set as a confirm can name it.
 func paths(files []git.FileChange) []string {
 	out := make([]string, 0, len(files))

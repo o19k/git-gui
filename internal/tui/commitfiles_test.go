@@ -44,7 +44,7 @@ func TestLogTabStacksTheFilesOverTheCommit(t *testing.T) {
 
 func TestTabReachesTheStackedPanesInOrder(t *testing.T) {
 	m := key(t, fixture(t), "2") // Log
-	want := []Panel{PanelBranches, PanelCommits, PanelCommitFiles, PanelDetails}
+	want := []Panel{PanelBranches, PanelWorktrees, PanelCommits, PanelCommitFiles, PanelDetails}
 
 	for i := 1; i < len(want); i++ {
 		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})

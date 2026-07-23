@@ -19,7 +19,12 @@ import (
 // the cursor has left is dropped. styled is the code column coloured as source,
 // empty for a file of no language the highlighter knows.
 type blameMsg struct {
-	path   string
+	path string
+
+	// rev is which revision was annotated, empty for the working copy. A reply
+	// for a revision already walked past is dropped like one for another file.
+	rev string
+
 	lines  []git.BlameLine
 	styled []string
 	err    error
@@ -28,10 +33,13 @@ type blameMsg struct {
 // readBlame annotates a file and colours the code beside the gutter. The
 // colouring is a pass over the whole file, so it happens once per read rather
 // than once per frame.
-func readBlame(ctx context.Context, repo *git.Repo, path string, palette syntax) tea.Cmd {
+func readBlame(ctx context.Context, repo *git.Repo, path, rev string, palette syntax) tea.Cmd {
 	return func() tea.Msg {
-		lines, err := repo.Blame(ctx, path)
-		return blameMsg{path: path, lines: lines, styled: highlightBlame(path, lines, palette), err: err}
+		lines, err := repo.BlameRev(ctx, path, rev)
+		return blameMsg{
+			path: path, rev: rev, lines: lines,
+			styled: highlightBlame(path, lines, palette), err: err,
+		}
 	}
 }
 
@@ -57,6 +65,7 @@ func highlightBlame(path string, lines []git.BlameLine, palette syntax) []string
 func (m Model) toggleBlame() (tea.Model, tea.Cmd) {
 	if m.blameOn {
 		m.blameOn, m.blamePath, m.blameLines, m.blameStyled = false, "", nil, nil
+		m.blameRev, m.blameCursor = "", 0
 		m.mainOffset = 0
 		return m, m.refreshPreview()
 	}
@@ -77,9 +86,10 @@ func (m Model) toggleBlame() (tea.Model, tea.Cmd) {
 	}
 
 	m.blameOn, m.blamePath, m.blameLines, m.blameStyled = true, file.Path, nil, nil
+	m.blameRev, m.blameCursor = "", 0
 	m.mainOffset = 0
 
-	return m, readBlame(m.ctx, m.repo, file.Path, currentSyntax())
+	return m, readBlame(m.ctx, m.repo, file.Path, "", currentSyntax())
 }
 
 // followBlame re-annotates when the selection moves to another file. A file
@@ -98,9 +108,11 @@ func (m *Model) followBlame() tea.Cmd {
 	}
 
 	m.blamePath, m.blameLines, m.blameStyled = file.Path, nil, nil
+	// Another file: the revision walked to in the last one says nothing here.
+	m.blameRev, m.blameCursor = "", 0
 	m.mainOffset = 0
 
-	return readBlame(m.ctx, m.repo, file.Path, currentSyntax())
+	return readBlame(m.ctx, m.repo, file.Path, "", currentSyntax())
 }
 
 // renderBlame formats a window of blame lines at a given width, for both the
@@ -108,6 +120,12 @@ func (m *Model) followBlame() tea.Cmd {
 // coloured, one entry per line, and may be empty — an unknown language loses
 // the colours rather than the annotations.
 func renderBlame(lines []git.BlameLine, styled []string, offset, height, width int) []string {
+	return renderBlameAt(lines, styled, offset, height, width, -1)
+}
+
+// renderBlameAt is renderBlame with a marked line. The Explorer's preview has
+// no cursor of its own and passes -1.
+func renderBlameAt(lines []git.BlameLine, styled []string, offset, height, width, cursor int) []string {
 	if len(lines) == 0 {
 		return emptyLines("annotating…")
 	}
@@ -122,19 +140,28 @@ func renderBlame(lines []git.BlameLine, styled []string, offset, height, width i
 
 	out := make([]string, 0, end-start)
 	for i, l := range lines[start:end] {
+		row := start + i
 		code := l.Text
-		if row := start + i; row < len(styled) {
+		if row < len(styled) {
 			code = styled[row]
 		}
 		gutter := fmt.Sprintf("%-7s %-*s %-10s", l.Short, authorW, truncate(l.Author, authorW), l.When)
-		out = append(out, theme.DimStyle.Render(gutter)+" "+code)
+
+		// The gutter is what the keys act on, so the marked line is named
+		// there rather than by a bar the code column would have to leave room
+		// for.
+		style := theme.DimStyle
+		if row == cursor {
+			style = theme.FooterKeyStyle
+		}
+		out = append(out, style.Render(gutter)+" "+code)
 	}
 	return out
 }
 
 // blamePaneLines renders the window of the annotated file that fits in height rows.
 func (m Model) blamePaneLines(height, width int) []string {
-	return renderBlame(m.blameLines, m.blameStyled, m.mainOffset, height, width)
+	return renderBlameAt(m.blameLines, m.blameStyled, m.mainOffset, height, width, m.blameCursor)
 }
 
 const maxBlameAuthor = 16
@@ -149,13 +176,12 @@ func truncate(s string, w int) string {
 	return s[:w-1] + "…"
 }
 
-// blameTitle names what is annotated.
+// blameTitle names what is annotated, and as of when where that is not now.
 func (m Model) blameTitle() string {
+	if m.blameRev != "" {
+		return "Blame — " + m.blamePath + " @ " + m.blameRev
+	}
 	return "Blame — " + m.blamePath
 }
 
 func (m Model) blameLineCount() int { return len(m.blameLines) }
-
-func blameKeyHints() [][2]string {
-	return [][2]string{{"j/k", "line"}, {"b", "back to the diff"}}
-}

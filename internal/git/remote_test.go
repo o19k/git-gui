@@ -81,7 +81,7 @@ func TestPushPublishesAndSetsUpstream(t *testing.T) {
 	}
 
 	// main has no upstream yet, so this must publish it.
-	if err := repo.Push(ctx, "main", false); err != nil {
+	if err := repo.Push(ctx, "", "main", false); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestPushWithUpstreamSendsCommits(t *testing.T) {
 	ctx := context.Background()
 
 	commitIn(t, repo.Path, "b.txt", "two\n", "second")
-	if err := repo.Push(ctx, "main", true); err != nil {
+	if err := repo.Push(ctx, "", "main", true); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestPushRejectedWhenBehind(t *testing.T) {
 	gitIn(t, theirs, "push")
 	commitIn(t, repo.Path, "d.txt", "four\n", "my work")
 
-	err := repo.Push(ctx, "main", true)
+	err := repo.Push(ctx, "", "main", true)
 	if err == nil {
 		t.Fatal("pushing over someone else's commit should have been rejected")
 	}
@@ -196,7 +196,7 @@ func TestForcePushLeaseProtectsUnseenCommits(t *testing.T) {
 	// Rewrite local history without ever fetching theirs.
 	commitIn(t, repo.Path, "d.txt", "four\n", "my rewrite")
 
-	if err := repo.ForcePush(ctx); err == nil {
+	if err := repo.ForcePush(ctx, "", "main"); err == nil {
 		t.Fatal("force-with-lease should have refused: the remote moved unseen")
 	}
 
@@ -207,7 +207,7 @@ func TestForcePushLeaseProtectsUnseenCommits(t *testing.T) {
 	gitIn(t, repo.Path, "reset", "--hard", "HEAD~1")
 	commitIn(t, repo.Path, "e.txt", "five\n", "my rewrite, take two")
 
-	if err := repo.ForcePush(ctx); err != nil {
+	if err := repo.ForcePush(ctx, "", "main"); err != nil {
 		t.Errorf("force-with-lease refused a current lease: %v", err)
 	}
 	if !strings.Contains(gitIn(t, repo.Path, "log", "--oneline", "origin/main"), "take two") {
@@ -218,7 +218,7 @@ func TestForcePushLeaseProtectsUnseenCommits(t *testing.T) {
 func TestPushValidatesBranchNameWhenPublishing(t *testing.T) {
 	repo, _ := remoteFixture(t)
 	// Publishing passes the name positionally, so it needs the same guard.
-	if err := repo.Push(context.Background(), "--delete", false); err == nil {
+	if err := repo.Push(context.Background(), "", "--delete", false); err == nil {
 		t.Error("a flag-like branch name was accepted for publishing")
 	}
 }

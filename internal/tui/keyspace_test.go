@@ -117,6 +117,7 @@ func TestNoPanelBindingShadowsPaneNavigation(t *testing.T) {
 	panels := map[string]string{
 		"filesKey":       "actions.go",
 		"branchesKey":    "actions.go",
+		"worktreesKey":   "worktree.go",
 		"commitsKey":     "actions.go",
 		"commitFilesKey": "actions.go",
 		"stashKey":       "actions.go",

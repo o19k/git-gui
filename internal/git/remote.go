@@ -29,9 +29,15 @@ func (r *Repo) runRemote(ctx context.Context, args ...string) error {
 	return err
 }
 
-// Fetch updates remote-tracking refs and prunes ones that are gone.
+// Fetch updates remote-tracking refs and prunes ones that are gone. With more
+// than one remote configured it reaches all of them: a fork's upstream is the
+// one whose new commits are being looked for, and it is never the default.
 func (r *Repo) Fetch(ctx context.Context) error {
-	return r.runRemote(ctx, "fetch", "--prune")
+	args := []string{"fetch", "--prune"}
+	if remotes, err := r.Remotes(ctx); err == nil && len(remotes) > 1 {
+		args = append(args, "--all")
+	}
+	return r.runRemote(ctx, args...)
 }
 
 // Pull fast-forwards the current branch to its upstream. --ff-only so a single
@@ -124,28 +130,46 @@ func (r *Repo) Outgoing(ctx context.Context, branch string) ([]Commit, error) {
 
 // PushUpTo publishes the branch only as far as one commit, leaving whatever
 // comes after it local.
-func (r *Repo) PushUpTo(ctx context.Context, sha, branch string) error {
+func (r *Repo) PushUpTo(ctx context.Context, remote, sha, branch string) error {
 	if err := checkNewBranchName(branch); err != nil {
 		return err
 	}
-	return r.runRemote(ctx, "push", "origin", sha+":refs/heads/"+branch)
+	return r.runRemote(ctx, "push", defaultRemote(remote), sha+":refs/heads/"+branch)
 }
 
-// Push publishes the current branch, setting an upstream if it has none.
-func (r *Repo) Push(ctx context.Context, branch string, hasUpstream bool) error {
-	if hasUpstream {
+// Push publishes the current branch, setting an upstream if it has none. An
+// empty remote means wherever the branch already goes.
+func (r *Repo) Push(ctx context.Context, remote, branch string, hasUpstream bool) error {
+	if hasUpstream && remote == "" {
 		return r.runRemote(ctx, "push")
 	}
 	if err := checkNewBranchName(branch); err != nil {
 		return err
 	}
-	return r.runRemote(ctx, "push", "--set-upstream", "origin", branch)
+	return r.runRemote(ctx, "push", "--set-upstream", defaultRemote(remote), branch)
 }
 
-// ForcePush overwrites the upstream with the local branch. --force-with-lease,
-// never a bare --force: it refuses when the remote holds unseen commits.
-func (r *Repo) ForcePush(ctx context.Context) error {
-	return r.runRemote(ctx, "push", "--force-with-lease")
+// ForcePush overwrites the branch on the remote with the local one.
+// --force-with-lease, never a bare --force: it refuses when the remote holds
+// unseen commits. An empty remote means the branch's own upstream.
+func (r *Repo) ForcePush(ctx context.Context, remote, branch string) error {
+	if remote == "" {
+		return r.runRemote(ctx, "push", "--force-with-lease")
+	}
+	if err := checkNewBranchName(branch); err != nil {
+		return err
+	}
+	// The lease has to name the ref it is held against: with an explicit remote
+	// git has no upstream to read it from.
+	return r.runRemote(ctx, "push", "--force-with-lease="+branch, remote, branch)
+}
+
+// defaultRemote is where a push goes when nothing said otherwise.
+func defaultRemote(remote string) string {
+	if remote == "" {
+		return "origin"
+	}
+	return remote
 }
 
 // Remotes lists the configured remote names.

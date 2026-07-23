@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -41,6 +42,8 @@ func (m Model) handlePanelKey(key string) (tea.Model, tea.Cmd, bool) {
 		return m.filesKey(key)
 	case PanelBranches:
 		return m.branchesKey(key)
+	case PanelWorktrees:
+		return m.worktreesKey(key)
 	case PanelCommits:
 		return m.commitsKey(key)
 	case PanelStash:
@@ -244,27 +247,61 @@ func (m Model) filesKey(key string) (tea.Model, tea.Cmd, bool) {
 		})
 		return m, nil, true
 
+	case "C":
+		// The editor is the only way in for a message with a body, a template
+		// or a trailer.
+		next, cmd := m.startCompose(false)
+		return next, cmd, true
+
 	case "A":
-		// Pre-filled with the message being replaced.
-		prefill := ""
-		if len(m.snap.Commits) > 0 {
-			prefill = m.snap.Commits[0].Subject
-		}
-		m.askInput("Amend last commit", prefill, func(message string) tea.Cmd {
-			if message == "" {
-				return nil
-			}
-			return m.do("amend", func() error { return repo.Amend(ctx, message) })
-		})
-		return m, nil, true
+		// A commit with a body cannot be re-typed at a one-line prompt without
+		// losing it, so that one goes to the editor instead.
+		return m, m.startAmend(), true
 
 	case "s":
-		m.askInput("Stash message", "", func(message string) tea.Cmd {
-			return m.do("stash", func() error { return repo.StashPush(ctx, message) })
-		})
-		return m, nil, true
+		next, cmd := m.askStash()
+		return next, cmd, true
 	}
 	return m, nil, false
+}
+
+// startAmend re-opens the last commit's message: at the prompt when it is one
+// line, and in the editor when there is more of it to keep.
+func (m Model) startAmend() tea.Cmd {
+	repo, ctx := m.repo, m.ctx
+	if repo == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		message, err := repo.HeadMessage(ctx)
+		return amendMsg{message: message, err: err}
+	}
+}
+
+// amendMsg carries the message being replaced, so the choice between the
+// prompt and the editor is made on what is actually there.
+type amendMsg struct {
+	message string
+	err     error
+}
+
+func (m Model) handleAmend(msg amendMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = msg.err.Error()
+		return m, nil
+	}
+	if strings.Contains(msg.message, "\n") {
+		return m.startCompose(true)
+	}
+
+	repo, ctx, opts := m.repo, m.ctx, m.commitOpts()
+	m.askInput("Amend last commit", msg.message, func(message string) tea.Cmd {
+		if message == "" {
+			return nil
+		}
+		return m.do("amend", func() error { return repo.Amend(ctx, message, opts) })
+	})
+	return m, nil
 }
 
 func (m Model) branchesKey(key string) (tea.Model, tea.Cmd, bool) {
@@ -352,6 +389,22 @@ func (m Model) branchesKey(key string) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		next, cmd := m.startCompare(branch)
+		return next, cmd, true
+
+	case "t":
+		if !hasBranch {
+			return m, nil, true
+		}
+		next, cmd := m.askTag(branch)
+		return next, cmd, true
+
+	case "P":
+		// On a tag, publish that tag. On anything else the key keeps its
+		// ordinary meaning, which is pushing the branch that is checked out.
+		if !hasBranch || branch.Kind != git.RefTag {
+			return m, nil, false
+		}
+		next, cmd := m.askPushTag(branch)
 		return next, cmd, true
 
 	case "r":
@@ -496,7 +549,7 @@ func (m Model) commitsKey(key string) (tea.Model, tea.Cmd, bool) {
 				head.Name, commit.Short, commit.Subject), false,
 			func() tea.Cmd {
 				return m.do("push", func() error {
-					return repo.PushUpTo(ctx, commit.SHA, head.Name)
+					return repo.PushUpTo(ctx, "", commit.SHA, head.Name)
 				})
 			})
 		return m, nil, true
@@ -595,6 +648,8 @@ func (m Model) panelKeyHints(p Panel) [][2]string {
 		return [][2]string{{"space", "stage"}, {"m", "mark"}, {"enter", "hunks"}, {"a/u", "stage/unstage all"}, {"c", "commit"}, {"d", "discard"}}
 	case PanelBranches:
 		return [][2]string{{"enter", "checkout"}, {"n", "new"}, {"m", "rename"}, {"M", "merge"}, {"r", "rebase onto"}, {"d/D", "delete"}}
+	case PanelWorktrees:
+		return [][2]string{{"enter", "open"}, {"n", "new"}, {"d", "remove"}}
 	case PanelCommits:
 		// The graph key leads: nothing on screen hints at a view toggle.
 		return [][2]string{{"L", "graph"}, {"s", "squash"}, {"r", "reword"}, {"d", "drop"}, {"z", "undo last"}, {"c", "cherry-pick"}, {"v", "revert"}}
@@ -654,11 +709,13 @@ func (m Model) handleRemoteKey(key string) (tea.Model, tea.Cmd, bool) {
 		if !ok {
 			return m, nil, true
 		}
+		// The branch's own upstream, not a chosen remote: overwriting one
+		// place is what this is for, and it is the place the branch came from.
 		m.askConfirm("Force push",
 			fmt.Sprintf("Overwrite origin/%s with your local branch? Commits only on the remote would be lost — git will still refuse if it holds anything you have not fetched.", head.Name),
 			true,
 			func() tea.Cmd {
-				return m.do("force push", func() error { return repo.ForcePush(ctx) })
+				return m.do("force push", func() error { return repo.ForcePush(ctx, "", head.Name) })
 			})
 		return m, nil, true
 	}

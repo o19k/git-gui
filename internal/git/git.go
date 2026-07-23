@@ -95,25 +95,40 @@ func failureMessage(stderr, stdout string, err error) string {
 
 // Snapshot is everything the panels need for one repaint.
 type Snapshot struct {
-	Branch   string
-	Files    []FileChange
-	Branches []Branch
-	Commits  []Commit
-	Unpushed map[string]bool
-	Stashes  []Stash
-	Rebasing bool
-	Errs     []error
+	Branch    string
+	Files     []FileChange
+	Branches  []Branch
+	Worktrees []Worktree
+	Commits   []Commit
+	Unpushed  map[string]bool
+	Stashes   []Stash
+	Rebasing  bool
+	Errs      []error
+}
+
+// LoadOpts is what a snapshot covers: how much history, of which ref, narrowed
+// how.
+type LoadOpts struct {
+	// Limit is how many commits the log reads.
+	Limit int
+
+	// Ref is what the commit list covers; empty means the checked-out branch.
+	Ref string
+
+	// Query narrows the commit list to what git can find, rather than to what
+	// the panel happens to be holding.
+	Query LogQuery
 }
 
 // Load fetches every panel's data concurrently, so a refresh costs the slowest
-// call rather than their sum. logRef is the ref the commit list covers; empty
-// means the checked-out one.
-func (r *Repo) Load(ctx context.Context, logLimit int, logRef string) Snapshot {
+// call rather than their sum.
+func (r *Repo) Load(ctx context.Context, opts LoadOpts) Snapshot {
 	var (
 		snap Snapshot
 		mu   sync.Mutex
 		wg   sync.WaitGroup
 	)
+	logLimit, logRef := opts.Limit, opts.Ref
 
 	fail := func(err error) {
 		if err == nil {
@@ -124,12 +139,18 @@ func (r *Repo) Load(ctx context.Context, logLimit int, logRef string) Snapshot {
 		mu.Unlock()
 	}
 
-	wg.Add(7)
+	wg.Add(8)
 	go func() { defer wg.Done(); v, err := r.Unpushed(ctx, logRef, logLimit); snap.Unpushed = v; fail(err) }()
 	go func() { defer wg.Done(); v, err := r.CurrentBranch(ctx); snap.Branch = v; fail(err) }()
 	go func() { defer wg.Done(); v, err := r.Status(ctx); snap.Files = v; fail(err) }()
 	go func() { defer wg.Done(); v, err := r.Branches(ctx); snap.Branches = v; fail(err) }()
-	go func() { defer wg.Done(); v, err := r.LogRef(ctx, logRef, logLimit); snap.Commits = v; fail(err) }()
+	go func() { defer wg.Done(); v, err := r.Worktrees(ctx); snap.Worktrees = v; fail(err) }()
+	go func() {
+		defer wg.Done()
+		v, err := r.SearchLog(ctx, logRef, logLimit, opts.Query)
+		snap.Commits = v
+		fail(err)
+	}()
 	go func() { defer wg.Done(); v, err := r.Stashes(ctx); snap.Stashes = v; fail(err) }()
 	go func() { defer wg.Done(); v, err := r.RebaseInProgress(ctx); snap.Rebasing = v; fail(err) }()
 	wg.Wait()
@@ -194,14 +215,21 @@ func (r *Repo) Log(ctx context.Context, limit int) ([]Commit, error) {
 // empty. Topological order rather than date order, so a branch's commits
 // arrive together instead of interleaved with another's by timestamp.
 func (r *Repo) LogRef(ctx context.Context, ref string, limit int) ([]Commit, error) {
+	return r.SearchLog(ctx, ref, limit, LogQuery{})
+}
+
+// SearchLog is LogRef narrowed by a query. An empty query reads the whole
+// history, which is what the panel does when nothing is being looked for.
+func (r *Repo) SearchLog(ctx context.Context, ref string, limit int, query LogQuery) ([]Commit, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	out, err := r.run(ctx, "log",
-		"--format="+logFormat,
+	args := append([]string{"log",
+		"--format=" + logFormat,
 		fmt.Sprintf("--max-count=%d", limit),
-		"--topo-order",
-		"--end-of-options", ref)
+		"--topo-order"}, query.args()...)
+
+	out, err := r.run(ctx, append(args, "--end-of-options", ref)...)
 	if err != nil {
 		// An empty repository is not an error worth showing.
 		if strings.Contains(err.Error(), "does not have any commits") ||
@@ -254,8 +282,8 @@ func (r *Repo) Stashes(ctx context.Context) ([]Stash, error) {
 
 // Diff returns the unified diff for one path. With staged, it is the index
 // against HEAD; otherwise the working tree against the index.
-func (r *Repo) Diff(ctx context.Context, path string, staged bool) (string, error) {
-	args := []string{"diff", "--no-color", "-M"}
+func (r *Repo) Diff(ctx context.Context, path string, staged bool, opts DiffOpts) (string, error) {
+	args := append([]string{"diff", "--no-color", "-M"}, opts.args()...)
 	if staged {
 		args = append(args, "--cached")
 	}
@@ -277,10 +305,11 @@ func (r *Repo) UntrackedPreview(ctx context.Context, path string) (string, error
 }
 
 // CommitDiff is the patch a commit introduced, against its first parent.
-func (r *Repo) CommitDiff(ctx context.Context, sha string) (string, error) {
-	return r.run(ctx, "show", "--no-color", "-M", "--stat", "--patch",
-		"--format=%C(auto)commit %H%n%anAuthor: %an <%ae>%nDate:   %ad%n%n    %s%n%n%b",
-		"--end-of-options", sha)
+func (r *Repo) CommitDiff(ctx context.Context, sha string, opts DiffOpts) (string, error) {
+	args := append([]string{"show", "--no-color", "-M", "--stat", "--patch",
+		"--format=%C(auto)commit %H%n%anAuthor: %an <%ae>%nDate:   %ad%n%n    %s%n%n%b"},
+		opts.args()...)
+	return r.run(ctx, append(args, "--end-of-options", sha)...)
 }
 
 // CommitFiles lists the paths a commit touched, against its first parent.
@@ -294,22 +323,23 @@ func (r *Repo) CommitFiles(ctx context.Context, sha string) ([]FileChange, error
 }
 
 // CommitFileDiff is the part of a commit that touches one path.
-func (r *Repo) CommitFileDiff(ctx context.Context, sha, path string) (string, error) {
-	return r.run(ctx, "show", "--no-color", "-M", "--format=",
-		"--end-of-options", sha, "--", path)
+func (r *Repo) CommitFileDiff(ctx context.Context, sha, path string, opts DiffOpts) (string, error) {
+	args := append([]string{"show", "--no-color", "-M", "--format="}, opts.args()...)
+	return r.run(ctx, append(args, "--end-of-options", sha, "--", path)...)
 }
 
 // StashDiff is the patch a stash entry holds.
-func (r *Repo) StashDiff(ctx context.Context, ref string) (string, error) {
-	return r.run(ctx, "stash", "show", "--no-color", "--patch", "--end-of-options", ref)
+func (r *Repo) StashDiff(ctx context.Context, ref string, opts DiffOpts) (string, error) {
+	args := append([]string{"stash", "show", "--no-color", "--patch"}, opts.args()...)
+	return r.run(ctx, append(args, "--end-of-options", ref)...)
 }
 
 // StashFileDiff is the part of a stash entry that touches one path. It goes
 // through `diff` against the stash's first parent rather than `stash show`,
 // which rejects a pathspec outright ("Too many revisions specified").
-func (r *Repo) StashFileDiff(ctx context.Context, ref, path string) (string, error) {
-	return r.run(ctx, "diff", "--no-color", "-M",
-		"--end-of-options", ref+"^", ref, "--", path)
+func (r *Repo) StashFileDiff(ctx context.Context, ref, path string, opts DiffOpts) (string, error) {
+	args := append([]string{"diff", "--no-color", "-M"}, opts.args()...)
+	return r.run(ctx, append(args, "--end-of-options", ref+"^", ref, "--", path)...)
 }
 
 // StashFiles lists the paths a stash entry changed, each with the status letter

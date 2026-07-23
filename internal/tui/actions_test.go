@@ -121,12 +121,33 @@ func TestEmptyCommitMessageRunsNothing(t *testing.T) {
 	}
 }
 
+// The message is read before the prompt is drawn, so the prompt holds all of
+// it rather than the subject the commit list happens to be showing.
 func TestAmendPromptIsPrefilledWithTheOldMessage(t *testing.T) {
 	m := onPane(t, fixture(t), PanelFiles)
 	m, _ = press(t, m, "A")
 
+	next, _ := m.Update(amendMsg{message: "first"})
+	m = next.(Model)
+
+	if m.overlay.kind != overlayInput {
+		t.Fatalf("amend did not ask: overlay kind = %d", m.overlay.kind)
+	}
 	if m.overlay.value != "first" {
 		t.Errorf("amend prompt = %q, want the message it replaces", m.overlay.value)
+	}
+}
+
+// A one-line prompt cannot hold a body, and typing over it would throw the
+// body away without saying so.
+func TestAmendKeepsABodyOutOfTheOneLinePrompt(t *testing.T) {
+	m := onPane(t, fixture(t), PanelFiles)
+
+	next, _ := m.Update(amendMsg{message: "subject\n\nthe body that must survive"})
+	m = next.(Model)
+
+	if m.overlay.kind == overlayInput {
+		t.Error("a message with a body was offered at the one-line prompt")
 	}
 }
 

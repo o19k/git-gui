@@ -56,7 +56,7 @@ func TestEndToEndRealRepo(t *testing.T) {
 	m = next.(Model)
 
 	// The real concurrent load, not a fixture.
-	snap := repo.Load(ctx, 50, "")
+	snap := repo.Load(ctx, git.LoadOpts{Limit: 50})
 	if len(snap.Errs) != 0 {
 		t.Fatalf("Load errors: %v", snap.Errs)
 	}
@@ -153,12 +153,12 @@ func TestEndToEndMutations(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	reload := func(m Model) Model {
 		t.Helper()
-		next, _ := m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+		next, _ := m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 		return next.(Model)
 	}
 
@@ -282,7 +282,7 @@ func TestEndToEndPushPull(t *testing.T) {
 	m = next.(Model)
 	reload := func(m Model) Model {
 		t.Helper()
-		next, _ := m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+		next, _ := m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 		return next.(Model)
 	}
 	m = reload(m)
@@ -400,7 +400,7 @@ func TestEndToEndHunkStaging(t *testing.T) {
 
 	load := func(m Model) Model {
 		t.Helper()
-		next, cmd := m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+		next, cmd := m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 		m = next.(Model)
 		if cmd != nil { // the queued diff request
 			next, _ = m.Update(cmd())
@@ -430,7 +430,7 @@ func TestEndToEndHunkStaging(t *testing.T) {
 	}
 	m = load(m)
 
-	staged, err := repo.Diff(ctx, "f.txt", true)
+	staged, err := repo.Diff(ctx, "f.txt", true, git.DiffOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestEndToEndDropCommit(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 
 	m = onPane(t, m, PanelCommits)
@@ -556,7 +556,7 @@ func TestANewFileIsColouredInLocalChanges(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 	m.cursor[PanelFiles] = indexOfPath(m.files(), "new.go")
 	if m.cursor[PanelFiles] < 0 {
@@ -579,7 +579,7 @@ func TestANewFileIsColouredInLocalChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "kept.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+	next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 	m = next.(Model)
 	m.cursor[PanelFiles] = indexOfPath(m.files(), "kept.txt")
 	m = drain(t, m, m.refreshPreview())

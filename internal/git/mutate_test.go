@@ -118,7 +118,7 @@ func TestCommitAndAmend(t *testing.T) {
 	if err := repo.Stage(ctx, "staged.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "add a staged file"); err != nil {
+	if err := repo.Commit(ctx, "add a staged file", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,7 +130,7 @@ func TestCommitAndAmend(t *testing.T) {
 		t.Fatalf("commit did not land: %+v", commits)
 	}
 
-	if err := repo.Amend(ctx, "add a staged file, reworded"); err != nil {
+	if err := repo.Amend(ctx, "add a staged file, reworded", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	commits, _ = repo.Log(ctx, 10)
@@ -155,7 +155,7 @@ func TestCommitWithNothingStagedFails(t *testing.T) {
 	if err := repo.Unstage(ctx, "staged.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "empty"); err == nil {
+	if err := repo.Commit(ctx, "empty", CommitOpts{}); err == nil {
 		t.Error("committing an empty index should have errored")
 	}
 }
@@ -235,7 +235,7 @@ func TestDeleteUnmergedBranchNeedsForce(t *testing.T) {
 	if err := repo.Stage(ctx, "only-here.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "work only on throwaway"); err != nil {
+	if err := repo.Commit(ctx, "work only on throwaway", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -270,7 +270,7 @@ func TestMergeCherryPickRevert(t *testing.T) {
 	if err := repo.StageAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "baseline"); err != nil {
+	if err := repo.Commit(ctx, "baseline", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -283,7 +283,7 @@ func TestMergeCherryPickRevert(t *testing.T) {
 	if err := repo.Stage(ctx, "side.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "side work"); err != nil {
+	if err := repo.Commit(ctx, "side work", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -328,7 +328,7 @@ func TestStashLifecycle(t *testing.T) {
 	repo, dir := newRepo(t)
 	ctx := context.Background()
 
-	if err := repo.StashPush(ctx, "everything"); err != nil {
+	if err := repo.StashPush(ctx, StashOpts{Message: "everything", Untracked: true}); err != nil {
 		t.Fatal(err)
 	}
 	files, _ := repo.Status(ctx)
@@ -371,7 +371,7 @@ func TestStashPop(t *testing.T) {
 	repo, _ := newRepo(t)
 	ctx := context.Background()
 
-	if err := repo.StashPush(ctx, "popme"); err != nil {
+	if err := repo.StashPush(ctx, StashOpts{Message: "popme", Untracked: true}); err != nil {
 		t.Fatal(err)
 	}
 	stashes, _ := repo.Stashes(ctx)

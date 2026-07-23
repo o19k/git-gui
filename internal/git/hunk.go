@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -70,30 +72,159 @@ func (f FileDiff) Patch(n int) (string, error) {
 	return b.String(), nil
 }
 
+// PatchLines rebuilds a patch holding only the chosen lines of hunk n, with
+// the counts in its header recomputed to match. chosen holds indices into the
+// hunk's body.
+//
+// A line the chooser left out is treated by whether the file the patch will be
+// applied to already holds it: one that is there stays, as context, and one
+// that is not is left out of the patch entirely. Which side that is depends on
+// the direction, so reverse flips the two.
+func (f FileDiff) PatchLines(n int, chosen map[int]bool, reverse bool) (string, error) {
+	if n < 0 || n >= len(f.Hunks) {
+		return "", errors.New("no such hunk")
+	}
+	hunk := f.Hunks[n]
+
+	oldStart, newStart, ok := parseHunkHeader(hunk.Header)
+	if !ok {
+		return "", errors.New("cannot read the hunk header: " + hunk.Header)
+	}
+
+	// inPreimage is the marker of a line the target file already holds. Staging
+	// applies the patch forwards, so that is the old side; unstaging applies it
+	// backwards, so it is the new side.
+	inPreimage := byte('-')
+	if reverse {
+		inPreimage = '+'
+	}
+
+	var (
+		body               []string
+		oldCount, newCount int
+		picked             bool
+		kept               bool // whether the line before this one made it in
+	)
+	for i, line := range hunk.Lines {
+		if line == "" {
+			// A stripped trailing space: an empty context line.
+			body, kept = append(body, ""), true
+			oldCount, newCount = oldCount+1, newCount+1
+			continue
+		}
+
+		switch marker := line[0]; {
+		case marker == '\\':
+			// "\ No newline at end of file" belongs to the line above it.
+			if kept {
+				body = append(body, line)
+			}
+
+		case marker != '+' && marker != '-':
+			body, kept = append(body, line), true
+			oldCount, newCount = oldCount+1, newCount+1
+
+		case chosen[i]:
+			body, kept, picked = append(body, line), true, true
+			if marker == '-' {
+				oldCount++
+			} else {
+				newCount++
+			}
+
+		case marker == inPreimage:
+			// Left out, but the target holds it: it has to stay, as context.
+			body, kept = append(body, " "+line[1:]), true
+			oldCount, newCount = oldCount+1, newCount+1
+
+		default:
+			// Left out and the target does not hold it: it never appears.
+			kept = false
+		}
+	}
+
+	if !picked {
+		return "", errors.New("no lines selected")
+	}
+
+	var b strings.Builder
+	for _, line := range f.Preamble {
+		b.WriteString(line + "\n")
+	}
+	fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
+	for _, line := range body {
+		b.WriteString(line + "\n")
+	}
+	return b.String(), nil
+}
+
+// parseHunkHeader reads the two starting line numbers out of a @@ line.
+func parseHunkHeader(header string) (oldStart, newStart int, ok bool) {
+	fields := strings.Fields(header)
+	if len(fields) < 3 || fields[0] != "@@" {
+		return 0, 0, false
+	}
+	old, oldOK := parseRangeStart(fields[1], '-')
+	next, newOK := parseRangeStart(fields[2], '+')
+	return old, next, oldOK && newOK
+}
+
+// parseRangeStart reads the "-12,7" half of a hunk header. The count is
+// optional, and only the start is needed here: the counts are recomputed.
+func parseRangeStart(field string, sign byte) (int, bool) {
+	if field == "" || field[0] != sign {
+		return 0, false
+	}
+	start, _, _ := strings.Cut(field[1:], ",")
+	n, err := strconv.Atoi(start)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 // StageHunk applies hunk n of a path's unstaged diff to the index.
-func (r *Repo) StageHunk(ctx context.Context, path string, n int) error {
-	raw, err := r.Diff(ctx, path, false)
-	if err != nil {
-		return err
-	}
-	patch, err := ParseFileDiff(raw).Patch(n)
-	if err != nil {
-		return err
-	}
-	return r.applyCached(ctx, patch, false)
+func (r *Repo) StageHunk(ctx context.Context, path string, n int, opts DiffOpts) error {
+	return r.applyHunk(ctx, path, n, nil, false, opts)
 }
 
 // UnstageHunk reverses hunk n of a path's staged diff out of the index.
-func (r *Repo) UnstageHunk(ctx context.Context, path string, n int) error {
-	raw, err := r.Diff(ctx, path, true)
+func (r *Repo) UnstageHunk(ctx context.Context, path string, n int, opts DiffOpts) error {
+	return r.applyHunk(ctx, path, n, nil, true, opts)
+}
+
+// StageLines applies only the chosen lines of hunk n to the index. chosen holds
+// indices into the hunk's body.
+func (r *Repo) StageLines(ctx context.Context, path string, n int, chosen map[int]bool, opts DiffOpts) error {
+	return r.applyHunk(ctx, path, n, chosen, false, opts)
+}
+
+// UnstageLines takes only the chosen lines of hunk n back out of the index.
+func (r *Repo) UnstageLines(ctx context.Context, path string, n int, chosen map[int]bool, opts DiffOpts) error {
+	return r.applyHunk(ctx, path, n, chosen, true, opts)
+}
+
+// applyHunk builds a one-hunk patch and feeds it to the index. chosen nil means
+// the whole hunk. The diff is re-read here rather than passed in, so the patch
+// carries the line numbers git is about to check it against; the options must
+// match what the caller saw, or the hunk numbering will not.
+func (r *Repo) applyHunk(ctx context.Context, path string, n int, chosen map[int]bool, reverse bool, opts DiffOpts) error {
+	raw, err := r.Diff(ctx, path, reverse, opts.Applicable())
 	if err != nil {
 		return err
 	}
-	patch, err := ParseFileDiff(raw).Patch(n)
+
+	diff := ParseFileDiff(raw)
+	patch := ""
+	if chosen == nil {
+		patch, err = diff.Patch(n)
+	} else {
+		patch, err = diff.PatchLines(n, chosen, reverse)
+	}
 	if err != nil {
 		return err
 	}
-	return r.applyCached(ctx, patch, true)
+	return r.applyCached(ctx, patch, reverse)
 }
 
 // applyCached feeds a patch to `git apply --cached` on stdin. --cached, not

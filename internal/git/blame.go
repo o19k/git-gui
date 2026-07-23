@@ -20,7 +20,21 @@ type BlameLine struct {
 // than only for the first line of each run, so parsing needs no carry-over
 // state between lines.
 func (r *Repo) Blame(ctx context.Context, path string) ([]BlameLine, error) {
-	out, err := r.run(ctx, "blame", "--line-porcelain", "--", path)
+	return r.BlameRev(ctx, path, "")
+}
+
+// BlameRev annotates the file as one revision held it, rather than as the
+// working tree does. It is what walking back past a wholesale reformat needs:
+// blame the parent of the commit that did it, and the lines underneath show
+// through.
+func (r *Repo) BlameRev(ctx context.Context, path, rev string) ([]BlameLine, error) {
+	args := []string{"blame", "--line-porcelain"}
+	if rev != "" {
+		args = append(args, rev)
+	}
+	args = append(args, "--", path)
+
+	out, err := r.run(ctx, args...)
 	if err != nil {
 		return nil, err
 	}

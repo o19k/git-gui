@@ -54,7 +54,7 @@ func TestEndToEndCommitChecks(t *testing.T) {
 		m := New(ctx, repo)
 		next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 		m = next.(Model)
-		next, _ = m.Update(snapshotMsg(repo.Load(ctx, 50, "")))
+		next, _ = m.Update(snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})))
 		return onPane(t, next.(Model), PanelFiles)
 	}
 	// commit types a message and carries it as far as the checks' verdict.

@@ -96,7 +96,7 @@ func multiHunkRepo(t *testing.T) *Repo {
 	if err := repo.Stage(ctx, "f.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "add f.txt"); err != nil {
+	if err := repo.Commit(ctx, "add f.txt", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +112,7 @@ func TestStageHunkStagesOnlyThatHunk(t *testing.T) {
 	repo := multiHunkRepo(t)
 	ctx := context.Background()
 
-	raw, err := repo.Diff(ctx, "f.txt", false)
+	raw, err := repo.Diff(ctx, "f.txt", false, DiffOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,11 +120,11 @@ func TestStageHunkStagesOnlyThatHunk(t *testing.T) {
 		t.Fatalf("fixture produced %d hunks, want 2:\n%s", n, raw)
 	}
 
-	if err := repo.StageHunk(ctx, "f.txt", 0); err != nil {
+	if err := repo.StageHunk(ctx, "f.txt", 0, DiffOpts{}); err != nil {
 		t.Fatalf("StageHunk: %v", err)
 	}
 
-	staged, err := repo.Diff(ctx, "f.txt", true)
+	staged, err := repo.Diff(ctx, "f.txt", true, DiffOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestStageHunkStagesOnlyThatHunk(t *testing.T) {
 		t.Errorf("the other hunk was staged too:\n%s", staged)
 	}
 
-	unstaged, err := repo.Diff(ctx, "f.txt", false)
+	unstaged, err := repo.Diff(ctx, "f.txt", false, DiffOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestStageHunkLeavesTheWorkingTreeAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.StageHunk(ctx, "f.txt", 0); err != nil {
+	if err := repo.StageHunk(ctx, "f.txt", 0, DiffOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(filepath.Join(repo.Path, "f.txt"))
@@ -176,16 +176,16 @@ func TestUnstageHunkReversesOneHunk(t *testing.T) {
 	if err := repo.Stage(ctx, "f.txt"); err != nil {
 		t.Fatal(err)
 	}
-	staged, _ := repo.Diff(ctx, "f.txt", true)
+	staged, _ := repo.Diff(ctx, "f.txt", true, DiffOpts{})
 	if n := len(ParseFileDiff(staged).Hunks); n != 2 {
 		t.Fatalf("expected 2 staged hunks, got %d", n)
 	}
 
-	if err := repo.UnstageHunk(ctx, "f.txt", 1); err != nil {
+	if err := repo.UnstageHunk(ctx, "f.txt", 1, DiffOpts{}); err != nil {
 		t.Fatalf("UnstageHunk: %v", err)
 	}
 
-	staged, _ = repo.Diff(ctx, "f.txt", true)
+	staged, _ = repo.Diff(ctx, "f.txt", true, DiffOpts{})
 	if !strings.Contains(staged, "+ONE") {
 		t.Errorf("the kept hunk left the index:\n%s", staged)
 	}
@@ -193,7 +193,7 @@ func TestUnstageHunkReversesOneHunk(t *testing.T) {
 		t.Errorf("the reversed hunk is still staged:\n%s", staged)
 	}
 
-	unstaged, _ := repo.Diff(ctx, "f.txt", false)
+	unstaged, _ := repo.Diff(ctx, "f.txt", false, DiffOpts{})
 	if !strings.Contains(unstaged, "+TEN") {
 		t.Errorf("the reversed hunk did not come back as unstaged:\n%s", unstaged)
 	}
@@ -204,17 +204,17 @@ func TestStageEveryHunkOneByOneMatchesStagingTheFile(t *testing.T) {
 	ctx := context.Background()
 
 	// Staging hunk 0 must not shift the numbering for hunk 1.
-	if err := repo.StageHunk(ctx, "f.txt", 0); err != nil {
+	if err := repo.StageHunk(ctx, "f.txt", 0, DiffOpts{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.StageHunk(ctx, "f.txt", 0); err != nil {
+	if err := repo.StageHunk(ctx, "f.txt", 0, DiffOpts{}); err != nil {
 		t.Fatalf("staging the remaining hunk failed: %v", err)
 	}
 
-	if unstaged, _ := repo.Diff(ctx, "f.txt", false); strings.TrimSpace(unstaged) != "" {
+	if unstaged, _ := repo.Diff(ctx, "f.txt", false, DiffOpts{}); strings.TrimSpace(unstaged) != "" {
 		t.Errorf("changes left unstaged:\n%s", unstaged)
 	}
-	staged, _ := repo.Diff(ctx, "f.txt", true)
+	staged, _ := repo.Diff(ctx, "f.txt", true, DiffOpts{})
 	if !strings.Contains(staged, "+ONE") || !strings.Contains(staged, "+TEN") {
 		t.Errorf("staging hunk by hunk lost a change:\n%s", staged)
 	}

@@ -86,7 +86,7 @@ func TestOpenRejectsNonRepo(t *testing.T) {
 
 func TestLoadReadsRealRepo(t *testing.T) {
 	repo, _ := newRepo(t)
-	snap := repo.Load(context.Background(), 50, "")
+	snap := repo.Load(context.Background(), LoadOpts{Limit: 50})
 
 	if len(snap.Errs) != 0 {
 		t.Fatalf("Load reported errors: %v", snap.Errs)
@@ -131,7 +131,7 @@ func TestDiffAndPreview(t *testing.T) {
 	repo, _ := newRepo(t)
 	ctx := context.Background()
 
-	unstaged, err := repo.Diff(ctx, "committed.txt", false)
+	unstaged, err := repo.Diff(ctx, "committed.txt", false, DiffOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestDiffAndPreview(t *testing.T) {
 		t.Errorf("unstaged diff missing the edit:\n%s", unstaged)
 	}
 
-	staged, err := repo.Diff(ctx, "staged.txt", true)
+	staged, err := repo.Diff(ctx, "staged.txt", true, DiffOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}

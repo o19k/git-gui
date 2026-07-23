@@ -18,7 +18,7 @@ func TestBlameNamesTheCommitBehindEachLine(t *testing.T) {
 	if err := repo.Stage(ctx, "b.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "add b"); err != nil {
+	if err := repo.Commit(ctx, "add b", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 

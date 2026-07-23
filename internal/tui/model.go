@@ -34,6 +34,7 @@ const (
 	PanelFiles Panel = iota
 	PanelDiff
 	PanelBranches
+	PanelWorktrees
 	PanelCommits
 	PanelCommitFiles
 	PanelDetails
@@ -53,7 +54,7 @@ const (
 var (
 	tabColumns = [tabCount][][]Panel{
 		TabChanges: {{PanelFiles}, {PanelDiff}},
-		TabLog:     {{PanelBranches}, {PanelCommits}, {PanelCommitFiles, PanelDetails}},
+		TabLog:     {{PanelBranches, PanelWorktrees}, {PanelCommits}, {PanelCommitFiles, PanelDetails}},
 		TabStash:   {{PanelStash}, {PanelStashFiles}, {PanelStashDiff}},
 		TabFiles:   {{PanelParent}, {PanelEntries}, {PanelPreview}},
 	}
@@ -63,7 +64,10 @@ var (
 		TabStash:   {26, 26, 48},
 		TabFiles:   {18, 30, 52},
 	}
-	stackWeights = map[Panel]int{PanelCommitFiles: 40, PanelDetails: 60}
+	stackWeights = map[Panel]int{
+		PanelBranches: 60, PanelWorktrees: 40,
+		PanelCommitFiles: 40, PanelDetails: 60,
+	}
 )
 
 // tabPanes is a tab's panes in focus order: down each column, then across.
@@ -104,6 +108,8 @@ func tabOf(p Panel) Tab {
 }
 
 const (
+	// logLimit is the fallback for a model built without settings; the stored
+	// preference is what an ordinary run uses.
 	logLimit = 500
 
 	// minPaneW keeps a column wide enough for a frame and some text; below it
@@ -146,6 +152,14 @@ type Model struct {
 	// It follows the Branches cursor. graphOn draws the lanes the parents imply.
 	logRef  string
 	graphOn bool
+
+	// logQuery narrows the commit list. It is answered by git on every refresh
+	// rather than by filtering what was read: the commit being looked for is
+	// usually older than the few hundred the panel holds.
+	logQuery git.LogQuery
+
+	// settings are the preferences that outlive the run.
+	settings git.Settings
 
 	// previewKey identifies the selection the content belongs to, so a git call
 	// landing after the cursor moved on can be discarded.
@@ -204,11 +218,24 @@ type Model struct {
 	// rather than once per frame.
 	blameStyled []string
 
+	// blameRev is the revision being annotated, empty for the working copy. It
+	// is what walking back through the parents moves. blameCursor is the line
+	// the annotation keys act on.
+	blameRev    string
+	blameCursor int
+
 	// previewStaged records which side of the index the visible diff came from,
 	// deciding whether staging a hunk adds or removes it.
 	hunkMode      bool
 	hunkCursor    int
 	previewStaged bool
+
+	// lineMode picks single lines out of the selected hunk. lineCursor is which
+	// line of the hunk body it sits on, and lineMarks the ones that will be
+	// staged — empty meaning the one under the cursor.
+	lineMode   bool
+	lineCursor int
+	lineMarks  map[int]bool
 
 	// --- Explorer ---
 
@@ -265,9 +292,10 @@ type Model struct {
 	loadTook time.Duration
 }
 
-// New builds the initial model for repo.
-func New(ctx context.Context, repo *git.Repo) Model {
-	return Model{
+// New builds the initial model for repo. Options carry anything that is not
+// the repository itself, so a caller wanting the defaults passes none.
+func New(ctx context.Context, repo *git.Repo, options ...Option) Model {
+	m := Model{
 		ctx: ctx, repo: repo,
 		focus: landingPane[TabChanges], lastFocus: landingPane,
 		mainTitle: "Diff",
@@ -278,7 +306,12 @@ func New(ctx context.Context, repo *git.Repo) Model {
 		fsIndex:       make(map[string][]fsEntry),
 		explorerMarks: make(map[string]bool),
 		stats:         make(map[string]fileMeta),
+		settings:      git.DefaultSettings(),
 	}
+	for _, option := range options {
+		option(&m)
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -318,8 +351,8 @@ func (m Model) reload() (Model, tea.Cmd) {
 // load reads every panel's data in one concurrent batch.
 func (m Model) load() tea.Cmd {
 	repo, ctx := m.repo, m.ctx
-	ref := m.logRef
-	return func() tea.Msg { return snapshotMsg(repo.Load(ctx, logLimit, ref)) }
+	opts := git.LoadOpts{Limit: m.logLimitOf(), Ref: m.logRef, Query: m.logQuery}
+	return func() tea.Msg { return snapshotMsg(repo.Load(ctx, opts)) }
 }
 
 // --- update ---
@@ -355,16 +388,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case blameMsg:
-		// Drop annotations for a file the cursor has already left.
-		if !m.blameOn || msg.path != m.blamePath {
+		// Drop annotations for a file, or a revision, the cursor has left.
+		if !m.blameOn || msg.path != m.blamePath || msg.rev != m.blameRev {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.blameOn, m.blamePath = false, ""
+			m.blameOn, m.blamePath, m.blameRev = false, "", ""
 			m.status = msg.err.Error()
 			return m, nil
 		}
 		m.blameLines, m.blameStyled = msg.lines, msg.styled
+		m.blameCursor = clamp(m.blameCursor, 0, max(len(msg.lines)-1, 0))
 		return m, nil
 
 	case commitFilesMsg:
@@ -456,6 +490,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editorDoneMsg:
 		return m.handleEditorDone(msg)
 
+	case settingSavedMsg:
+		return m.handleSettingSaved(msg)
+
+	case reflogMsg:
+		return m.showReflog(msg)
+
+	case worktreesMsg:
+		return m.showWorktrees(msg)
+
+	case composeDoneMsg:
+		return m.handleComposeDone(msg)
+
+	case searchFieldMsg:
+		return m.handleSearchField(msg)
+
+	case searchSetMsg:
+		return m.handleSearchSet(msg)
+
+	case reflogPickMsg:
+		return m.handleReflogPick(msg)
+
+	case reflogBranchMsg:
+		return m.handleReflogBranch(msg)
+
+	case reflogResetMsg:
+		return m.handleReflogReset(msg)
+
+	case worktreePickMsg:
+		return m.handleWorktreePick(msg)
+
+	case newWorktreeMsg:
+		return m.handleNewWorktree(msg)
+
+	case worktreeBranchMsg:
+		return m.handleWorktreeBranch(msg)
+
+	case openedMsg:
+		return m.handleOpened(msg)
+
+	case amendMsg:
+		return m.handleAmend(msg)
+
+	case stashKindMsg:
+		return m.handleStashKind(msg)
+
+	case tagNameMsg:
+		return m.handleTagName(msg)
+
 	case mutationMsg:
 		m.busy = ""
 		if msg.err != nil {
@@ -500,9 +582,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFilterKey(msg)
 	}
 
-	// Hunk mode rebinds movement and space, so it is asked first.
+	// Hunk mode rebinds movement and space, so it is asked first. Line mode
+	// sits inside it and rebinds them again.
 	if m.hunkMode {
+		if m.lineMode {
+			if next, cmd, handled := m.handleLineKey(msg.String()); handled {
+				return next, cmd
+			}
+		}
 		if next, cmd, handled := m.handleHunkKey(msg.String()); handled {
+			return next, cmd
+		}
+	}
+
+	// Annotations rebind enter and the parent walk while they are on.
+	if m.blameOn {
+		if next, cmd, handled := m.handleBlameKey(msg.String()); handled {
 			return next, cmd
 		}
 	}
@@ -562,8 +657,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleBlame()
 
 	case "T":
-		theme.UseLight(!theme.IsLight())
-		return m, nil
+		return m.toggleTheme()
+
+	case "w":
+		return m.toggleWhitespace()
+
+	case "[":
+		return m.cycleContext(-1)
+
+	case "]":
+		return m.cycleContext(1)
+
+	case "S":
+		return m.askSearch()
+
+	case "E":
+		return m, m.loadReflog()
+
+	case "W":
+		return m, m.loadWorktrees()
 
 	case "v":
 		// Hunk marking reads line offsets straight out of the unified text.
@@ -770,6 +882,8 @@ func (m Model) panelLen(p Panel) int {
 		return len(m.files())
 	case PanelBranches:
 		return len(m.branches())
+	case PanelWorktrees:
+		return len(m.worktrees())
 	case PanelCommits:
 		return len(m.commits())
 	case PanelStash:
@@ -864,6 +978,7 @@ func (m *Model) refreshPreview() tea.Cmd {
 		// An untracked file previews as its own source, so it is coloured as
 		// source. The palette is read here: the closure cannot see the theme.
 		palette := currentSyntax()
+		opts := m.diffOpts()
 		return func() tea.Msg {
 			if file.Untracked() {
 				content, err := repo.UntrackedPreview(ctx, file.Path)
@@ -872,7 +987,7 @@ func (m *Model) refreshPreview() tea.Cmd {
 					styled: highlight(file.Path, content, palette), err: err,
 				}
 			}
-			content, err := repo.Diff(ctx, file.Path, staged)
+			content, err := repo.Diff(ctx, file.Path, staged, opts)
 			title := "Diff — " + file.Path
 			if staged {
 				title = "Staged — " + file.Path
@@ -900,6 +1015,27 @@ func (m *Model) refreshPreview() tea.Cmd {
 		}
 		return preview
 
+	case PanelWorktrees:
+		if len(m.worktrees()) == 0 {
+			m.previewKey, m.mainTitle, m.mainContent, m.mainStyled = "", "Log", "", nil
+			return nil
+		}
+		tree := m.worktrees()[m.cursor[PanelWorktrees]]
+		ref := worktreeRef(tree)
+		key := "worktree:" + tree.Path
+		m.previewKey = key
+		preview := func() tea.Msg {
+			content, err := repo.BranchLog(ctx, ref, 100)
+			return previewMsg{key: key, title: "Log — " + tree.Name(), content: renderPrettyLog(content), err: err}
+		}
+
+		// Aim the commit list at this checkout's tip, so stepping right lands in
+		// what the worktree is sitting on.
+		if aimed := m.aimLog(ref); aimed != nil {
+			return tea.Batch(preview, aimed)
+		}
+		return preview
+
 	case PanelCommits:
 		if len(m.commits()) == 0 {
 			m.previewKey, m.mainTitle, m.mainContent, m.mainStyled = "", "Commit", "", nil
@@ -911,8 +1047,9 @@ func (m *Model) refreshPreview() tea.Cmd {
 		m.previewKey = key
 		// The file list belongs to the commit, so it is read alongside the patch.
 		files := m.loadCommitFiles()
+		opts := m.diffOpts()
 		return tea.Batch(files, func() tea.Msg {
-			content, err := repo.CommitDiff(ctx, commit.SHA)
+			content, err := repo.CommitDiff(ctx, commit.SHA, opts)
 			return previewMsg{key: key, title: "Commit " + commit.Short, content: content, err: err}
 		})
 
@@ -925,8 +1062,9 @@ func (m *Model) refreshPreview() tea.Cmd {
 		sha := m.commitSHA
 		key := "commitfile:" + sha + ":" + file.Path
 		m.previewKey = key
+		opts := m.diffOpts()
 		return func() tea.Msg {
-			content, err := repo.CommitFileDiff(ctx, sha, file.Path)
+			content, err := repo.CommitFileDiff(ctx, sha, file.Path, opts)
 			return previewMsg{key: key, title: "Diff — " + file.Path, content: content, err: err}
 		}
 
@@ -941,8 +1079,9 @@ func (m *Model) refreshPreview() tea.Cmd {
 		m.previewKey = key
 		// The file list belongs to the entry, so it is read alongside the patch.
 		files := m.loadStashFiles()
+		opts := m.diffOpts()
 		return tea.Batch(files, func() tea.Msg {
-			content, err := repo.StashDiff(ctx, stash.Ref)
+			content, err := repo.StashDiff(ctx, stash.Ref, opts)
 			return previewMsg{key: key, title: "Stash " + stash.Ref, content: content, err: err}
 		})
 
@@ -955,8 +1094,9 @@ func (m *Model) refreshPreview() tea.Cmd {
 		ref := m.stashRef
 		key := "stashfile:" + ref + ":" + file.Path
 		m.previewKey = key
+		opts := m.diffOpts()
 		return func() tea.Msg {
-			content, err := repo.StashFileDiff(ctx, ref, file.Path)
+			content, err := repo.StashFileDiff(ctx, ref, file.Path, opts)
 			return previewMsg{key: key, title: "Diff — " + file.Path, content: content, err: err}
 		}
 	}
@@ -1028,7 +1168,11 @@ func (m Model) panelTitle(p Panel) string {
 		}
 		if m.hunkMode {
 			if file, ok := m.selectedFile(); ok {
-				return hunkTitle(file.Path, m.hunkCursor, len(hunkRanges(m.mainContent)), m.previewStaged)
+				total := len(hunkRanges(m.mainContent))
+				if m.lineMode {
+					return m.lineTitle(file.Path, total)
+				}
+				return hunkTitle(file.Path, m.hunkCursor, total, m.previewStaged)
 			}
 		}
 		return m.mainTitle
@@ -1040,6 +1184,8 @@ func (m Model) panelTitle(p Panel) string {
 		name, unit = "Changes", "file"
 	case PanelBranches:
 		name, unit = "Branches", "ref"
+	case PanelWorktrees:
+		name, unit = "Worktrees", "worktree"
 	case PanelCommits:
 		name, unit = "Commits", "commit"
 	case PanelStash:
@@ -1052,10 +1198,11 @@ func (m Model) panelTitle(p Panel) string {
 		return m.explorerTitle(p)
 	}
 
-	// The commit list is of one ref, and which ref belongs in its title.
+	// The commit list is of one ref, and which ref belongs in its title. A
+	// query narrows it further, and a short list is not a short history.
 	suffix := m.filterSuffix(p)
 	if p == PanelCommits {
-		suffix = m.logSuffix() + suffix
+		suffix = m.logSuffix() + m.searchSuffix() + suffix
 	}
 
 	n := m.panelLen(p)
@@ -1082,6 +1229,9 @@ func (m Model) panelLines(p Panel, innerH, innerW int) []string {
 			return m.blamePaneLines(innerH, innerW)
 		}
 		if m.hunkMode {
+			if m.lineMode {
+				return m.linePaneLines(innerH)
+			}
 			return hunkPaneLines(m.mainContent, hunkRanges(m.mainContent), m.hunkCursor, m.mainOffset, innerH)
 		}
 		if m.loading && m.mainContent == "" {
@@ -1120,6 +1270,11 @@ func (m Model) panelLines(p Panel, innerH, innerW int) []string {
 			return emptyLines("no refs")
 		}
 		return branchLines(m.branches(), start, end, m.cursor[p], innerW, focused)
+	case PanelWorktrees:
+		if n == 0 {
+			return emptyLines("no worktrees")
+		}
+		return m.worktreeLines(start, end, m.cursor[p], innerW, focused)
 	case PanelCommits:
 		if n == 0 {
 			return emptyLines("no commits")
@@ -1171,9 +1326,14 @@ func (m Model) footer() string {
 		return keyLine(filterKeyHints(), m.width)
 	}
 
-	// In hunk mode the panel bindings are rebound.
+	// In hunk mode the panel bindings are rebound, and line mode rebinds them
+	// again.
 	if m.hunkMode {
-		return keyLine(append(hunkKeyHints(), [2]string{"?", "help"}), m.width)
+		hints := hunkKeyHints()
+		if m.lineMode {
+			hints = lineKeyHints()
+		}
+		return keyLine(append(hints, [2]string{"?", "help"}), m.width)
 	}
 
 	// The focused panel's own bindings come first: those are what change.
@@ -1205,9 +1365,14 @@ func helpLines() []string {
 			{"j / k, ↓ / ↑", "move selection, or scroll"},
 			{"g / G", "first / last"},
 			{"/", "filter the focused list"},
+			{"S", "search commits, in git"},
 			{"v", "unified or side-by-side diff"},
 			{"b", "annotate the selected file (blame)"},
 			{"ctrl+f / ctrl+b", "page the diff"},
+			{"w", "hide whitespace-only changes"},
+			{"[ / ]", "narrower / wider diff context"},
+			{"E", "reflog: where HEAD has been"},
+			{"W", "worktrees: open, add, remove"},
 			{"T", "light or dark"},
 			{"R", "refresh now"},
 			{"y / Y", "copy the path / the full path"},
@@ -1215,7 +1380,7 @@ func helpLines() []string {
 		}},
 		{"Tabs", [][2]string{
 			{"1", "Local Changes — files and their diff"},
-			{"2", "Log — branches, commits, details"},
+			{"2", "Log — branches, worktrees, commits"},
 			{"3", "Stash — entries and their diff"},
 			{"4", "Explorer — the tree, with a preview"},
 		}},
@@ -1231,8 +1396,9 @@ func helpLines() []string {
 			{"a / u", "stage all / unstage all"},
 			{"enter", "pick hunks in the diff pane"},
 			{"c", "commit the index"},
+			{"C", "write the message in $EDITOR"},
 			{"A", "amend the last commit"},
-			{"s", "stash everything"},
+			{"s", "stash: asks what goes in"},
 			{"d", "discard changes"},
 			{"H", "history of this file"},
 			{"t", "untrack, keeping the file"},
@@ -1251,12 +1417,35 @@ func helpLines() []string {
 			{"m", "rename"},
 			{"M", "merge into current"},
 			{"r", "rebase the current branch onto this"},
+			{"t", "tag this ref's tip"},
+			{"P", "on a tag: publish it"},
 			{"d / D", "delete / force-delete — on a remote branch, on the remote"},
+		}},
+		{"Worktrees (Log tab)", [][2]string{
+			{"enter", "open this checkout in the tool"},
+			{"n", "add a worktree"},
+			{"d", "remove this worktree"},
+			{"▸", "marks the one open now"},
 		}},
 		{"Hunks (enter, in Changes)", [][2]string{
 			{"j / k", "next / previous hunk"},
 			{"space", "stage / unstage this hunk"},
+			{"enter", "pick single lines out of it"},
 			{"esc", "back to the file list"},
+		}},
+		{"Lines (enter, in hunks)", [][2]string{
+			{"j / k", "next / previous changed line"},
+			{"space", "pick this line"},
+			{"a", "pick every line in the hunk"},
+			{"enter", "stage what is picked"},
+			{"esc", "back to the hunks"},
+		}},
+		{"Blame (b, then the diff pane)", [][2]string{
+			{"j / k", "move down the file"},
+			{"enter", "open this line's commit"},
+			{"<", "annotate as the parent held it"},
+			{">", "back to the working copy"},
+			{"b", "back to the diff"},
 		}},
 		{"Commits", [][2]string{
 			{"s", "squash into parent"},

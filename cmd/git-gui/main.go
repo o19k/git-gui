@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -17,6 +18,10 @@ import (
 var version = "dev"
 
 func main() {
+	// Before anything that can fail: a panic with the terminal on the alternate
+	// screen leaves nothing to read the failure on.
+	defer restoreOnPanic()
+
 	// git runs this program as its rebase editors (see internal/git/rebase.go).
 	// Handled before flag parsing: those arguments are git's, not ours.
 	if len(os.Args) > 1 {
@@ -55,15 +60,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Preferences live in git config, so a run starts where the last one left
+	// off. Reading them cannot fail in a way worth stopping for: an
+	// unconfigured repository and an unreadable one both mean the defaults.
+	settings := repo.LoadSettings(ctx)
+
 	// Opt-in: capture costs the terminal's own text selection, and every mouse
-	// action here already has a key.
+	// action here already has a key. The flag turns it on for one run, the
+	// setting for every one.
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
-	if *mouse {
+	if *mouse || settings.Mouse {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
 
-	program := tea.NewProgram(tui.New(ctx, repo), opts...)
-	if _, err := program.Run(); err != nil {
+	program := tea.NewProgram(tui.New(ctx, repo, tui.WithSettings(settings)), opts...)
+	_, err = program.Run()
+
+	// A panic has already printed the stack bubbletea caught, and clearing
+	// would erase the one record of it.
+	panicked := errors.Is(err, tea.ErrProgramPanic)
+
+	// Before any error goes out, or it would be the thing that gets erased.
+	if isTerminal(os.Stdout) && !panicked {
+		clearScreen(os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "git-gui:", err)
 		os.Exit(1)
 	}

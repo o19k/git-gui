@@ -286,8 +286,9 @@ func (m *Model) previewCommand() tea.Cmd {
 		}
 
 	case previewDiff:
+		opts := m.diffOpts()
 		return func() tea.Msg {
-			content, err := repo.Diff(ctx, path, false)
+			content, err := repo.Diff(ctx, path, false, opts)
 			return explorerPreviewMsg{id: id, title: title, content: content, err: err}
 		}
 

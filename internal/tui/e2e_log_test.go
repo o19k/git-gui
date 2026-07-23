@@ -57,7 +57,7 @@ func TestEndToEndTheCommitListFollowsTheSelectedBranch(t *testing.T) {
 	m := New(ctx, repo)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = next.(Model)
-	m = deliver(t, m, snapshotMsg(repo.Load(ctx, 50, "")), 0)
+	m = deliver(t, m, snapshotMsg(repo.Load(ctx, git.LoadOpts{Limit: 50})), 0)
 
 	// Standing on main, the side branch's commit is not in the list.
 	if strings.Contains(m.View(), "only on sidebranch") {

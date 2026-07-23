@@ -37,11 +37,12 @@ func (m Model) loadLog() tea.Cmd {
 	if repo == nil {
 		return nil
 	}
+	limit, query := m.logLimitOf(), m.logQuery
 	return func() tea.Msg {
-		commits, err := repo.LogRef(ctx, ref, logLimit)
+		commits, err := repo.SearchLog(ctx, ref, limit, query)
 		// Read alongside the commits, or marks from the branch just left would
 		// sit on rows they do not belong to.
-		unpushed, uerr := repo.Unpushed(ctx, ref, logLimit)
+		unpushed, uerr := repo.Unpushed(ctx, ref, limit)
 		if err == nil {
 			err = uerr
 		}

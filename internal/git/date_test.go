@@ -83,14 +83,14 @@ func datedRepo(t *testing.T) *Repo {
 	if err := repo.StageAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "second"); err != nil {
+	if err := repo.Commit(ctx, "second", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, dir, "third.txt", "three\n")
 	if err := repo.Stage(ctx, "third.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "third"); err != nil {
+	if err := repo.Commit(ctx, "third", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	return repo
@@ -175,7 +175,7 @@ func TestSettingADateNeedsACleanTree(t *testing.T) {
 	if err := repo.StageAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "second"); err != nil {
+	if err := repo.Commit(ctx, "second", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	commits, err := repo.Log(ctx, 5)

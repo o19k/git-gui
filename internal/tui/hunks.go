@@ -57,6 +57,7 @@ func (m *Model) exitHunkMode() {
 	m.hunkCursor = 0
 	m.mainOffset = 0
 	m.focus = PanelFiles
+	m.lineMode, m.lineCursor, m.lineMarks = false, 0, nil
 }
 
 // scrollToHunk puts the selected hunk at the top of the pane.
@@ -83,6 +84,10 @@ func (m Model) handleHunkKey(key string) (tea.Model, tea.Cmd, bool) {
 		m.exitHunkMode()
 		return m, nil, true
 
+	case "enter":
+		m.enterLineMode()
+		return m, nil, true
+
 	case "j", "down":
 		m.hunkCursor = clamp(m.hunkCursor+1, 0, len(ranges)-1)
 		m.scrollToHunk()
@@ -99,15 +104,16 @@ func (m Model) handleHunkKey(key string) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		repo, ctx, n := m.repo, m.ctx, m.hunkCursor
+		opts := m.diffOpts()
 
 		// The staged diff can only be taken back out, the unstaged one put in.
 		if m.previewStaged {
 			return m, m.do("unstage hunk", func() error {
-				return repo.UnstageHunk(ctx, file.Path, n)
+				return repo.UnstageHunk(ctx, file.Path, n, opts)
 			}), true
 		}
 		return m, m.do("stage hunk", func() error {
-			return repo.StageHunk(ctx, file.Path, n)
+			return repo.StageHunk(ctx, file.Path, n, opts)
 		}), true
 	}
 	return m, nil, false
@@ -148,5 +154,7 @@ func hunkTitle(path string, selected, total int, staged bool) string {
 
 // hunkKeyHints is the footer while hunk mode is on.
 func hunkKeyHints() [][2]string {
-	return [][2]string{{"j/k", "hunk"}, {"space", "stage"}, {"esc", "back to files"}}
+	return [][2]string{
+		{"j/k", "hunk"}, {"space", "stage"}, {"enter", "pick lines"}, {"esc", "back to files"},
+	}
 }

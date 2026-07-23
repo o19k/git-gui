@@ -160,7 +160,7 @@ func TestPushUpToLeavesTheLaterCommitsBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Outgoing is newest first, so the one to publish up to is the older.
-	if err := repo.PushUpTo(ctx, commits[1].SHA, "main"); err != nil {
+	if err := repo.PushUpTo(ctx, "", commits[1].SHA, "main"); err != nil {
 		t.Fatal(err)
 	}
 

@@ -26,9 +26,12 @@ type checkResult struct {
 }
 
 // checksMsg carries a finished run of every configured check. message is the
-// commit the run is gating, so it survives the round trip.
+// commit the run is gating, so it survives the round trip; file is where that
+// message is kept when it was written in the editor, since a message with a
+// body cannot go on a command line.
 type checksMsg struct {
 	message string
+	file    string
 	results []checkResult
 	err     error
 }
@@ -36,6 +39,15 @@ type checksMsg struct {
 // startCommit runs the repository's checks, then commits if they pass. A
 // repository with none configured commits straight away.
 func (m Model) startCommit(message string) (Model, tea.Cmd) {
+	return m.runCommitChecks(message, "")
+}
+
+// startComposeCommit is startCommit for a message written in the editor.
+func (m Model) startComposeCommit(path string) (Model, tea.Cmd) {
+	return m.runCommitChecks(m.pendingCommit, path)
+}
+
+func (m Model) runCommitChecks(message, file string) (Model, tea.Cmd) {
 	repo, ctx := m.repo, m.ctx
 
 	// Reading the configuration is itself a git call, so it runs in the command
@@ -46,10 +58,21 @@ func (m Model) startCommit(message string) (Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		checks, err := repo.Checks(ctx)
 		if err != nil {
-			return checksMsg{message: message, err: err}
+			return checksMsg{message: message, file: file, err: err}
 		}
-		return checksMsg{message: message, results: runChecks(ctx, repo.Path, checks)}
+		return checksMsg{message: message, file: file, results: runChecks(ctx, repo.Path, checks)}
 	}
+}
+
+// commit records what the checks were gating, from the file when the message
+// was written in the editor and from the string when it was typed at the
+// prompt.
+func (m Model) commit(msg checksMsg) func() error {
+	repo, ctx, opts := m.repo, m.ctx, m.commitOpts()
+	if msg.file != "" {
+		return func() error { return repo.CommitFile(ctx, msg.file, opts) }
+	}
+	return func() error { return repo.Commit(ctx, msg.message, opts) }
 }
 
 // runChecks executes each check in the repository directory, capturing its
@@ -114,10 +137,7 @@ func (m Model) handleChecks(msg checksMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if !anyFailed {
-		repo, ctx := m.repo, m.ctx
-		return m, m.do("commit", func() error {
-			return repo.Commit(ctx, msg.message)
-		})
+		return m, m.do("commit", m.commit(msg))
 	}
 
 	// Some failed: show the first failure and ask whether to commit anyway.
@@ -133,14 +153,10 @@ func (m Model) handleChecks(msg checksMsg) (tea.Model, tea.Cmd) {
 	self := m
 	m.askChoice(title, body, []choice{
 		{
-			label: "Commit anyway",
-			hint:  "record the commit despite the failed check",
-			busy:  "committing…",
-			action: func() tea.Cmd {
-				return self.do("commit", func() error {
-					return self.repo.Commit(self.ctx, msg.message)
-				})
-			},
+			label:  "Commit anyway",
+			hint:   "record the commit despite the failed check",
+			busy:   "committing…",
+			action: func() tea.Cmd { return self.do("commit", self.commit(msg)) },
 		},
 		{
 			label:  "Cancel",

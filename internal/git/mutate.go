@@ -138,16 +138,51 @@ func (r *Repo) Discard(ctx context.Context, file FileChange) error {
 	return nil
 }
 
+// CommitOpts are the parts of a commit that are not its message.
+type CommitOpts struct {
+	// Signoff adds the Signed-off-by trailer. Signing with a key is not here:
+	// git decides that from commit.gpgsign, which this goes through.
+	Signoff bool
+
+	// Amend replaces the last commit instead of adding one.
+	Amend bool
+}
+
+// args are the flags these options add to a commit command.
+func (o CommitOpts) args() []string {
+	var args []string
+	if o.Signoff {
+		args = append(args, "--signoff")
+	}
+	if o.Amend {
+		args = append(args, "--amend")
+	}
+	return args
+}
+
 // Commit records the index under message.
-func (r *Repo) Commit(ctx context.Context, message string) error {
-	_, err := r.run(ctx, "commit", "--message", message)
+func (r *Repo) Commit(ctx context.Context, message string, opts CommitOpts) error {
+	args := append([]string{"commit"}, opts.args()...)
+	_, err := r.run(ctx, append(args, "--message", message)...)
+	return err
+}
+
+// CommitFile records the index under a message read from a file, which is how a
+// message with a body gets in: a command line carries one, but the prompt that
+// fills it in does not.
+//
+// --cleanup=strip drops the comment lines the template puts there, the same
+// treatment the message would get had git opened the editor itself.
+func (r *Repo) CommitFile(ctx context.Context, path string, opts CommitOpts) error {
+	args := append([]string{"commit"}, opts.args()...)
+	_, err := r.run(ctx, append(args, "--cleanup=strip", "--file", path)...)
 	return err
 }
 
 // Amend replaces the last commit, keeping its parent.
-func (r *Repo) Amend(ctx context.Context, message string) error {
-	_, err := r.run(ctx, "commit", "--amend", "--message", message)
-	return err
+func (r *Repo) Amend(ctx context.Context, message string, opts CommitOpts) error {
+	opts.Amend = true
+	return r.Commit(ctx, message, opts)
 }
 
 // Checkout switches to a branch.
@@ -174,19 +209,23 @@ func (r *Repo) CreateBranch(ctx context.Context, name string) error {
 	return err
 }
 
-// checkNewBranchName rejects names git would misread or refuse. Stricter than
-// git, so nothing reaching the command line can be taken for a flag.
-func checkNewBranchName(name string) error {
+// checkNewBranchName rejects names git would misread or refuse.
+func checkNewBranchName(name string) error { return checkRefName("branch", name) }
+
+// checkRefName rejects names git would misread or refuse. Stricter than git, so
+// nothing reaching the command line can be taken for a flag. kind names what is
+// being made, since branches and tags share the rules but not the message.
+func checkRefName(kind, name string) error {
 	switch {
 	case name == "":
-		return errors.New("branch name is empty")
+		return errors.New(kind + " name is empty")
 	case strings.HasPrefix(name, "-"):
-		return errors.New("branch name may not begin with '-'")
+		return errors.New(kind + " name may not begin with '-'")
 	case strings.ContainsAny(name, " \t\n~^:?*[\\"):
-		return errors.New("branch name contains a character git forbids")
+		return errors.New(kind + " name contains a character git forbids")
 	case strings.Contains(name, ".."), strings.HasSuffix(name, ".lock"),
 		strings.HasPrefix(name, "/"), strings.HasSuffix(name, "/"):
-		return errors.New("branch name is not a valid ref")
+		return errors.New(kind + " name is not a valid ref")
 	}
 	return nil
 }
@@ -224,11 +263,45 @@ func (r *Repo) Revert(ctx context.Context, sha string) error {
 	return err
 }
 
-// StashPush stashes every change, untracked files included, under message.
-func (r *Repo) StashPush(ctx context.Context, message string) error {
-	args := []string{"stash", "push", "--include-untracked"}
-	if message != "" {
-		args = append(args, "--message", message)
+// StashOpts chooses what a stash takes. The zero value is every tracked
+// change, which is git's own default.
+type StashOpts struct {
+	Message string
+
+	// Untracked also sets aside files git has never seen.
+	Untracked bool
+
+	// StagedOnly stashes what the index holds and leaves the working tree
+	// alone. Needs git 2.35 or newer.
+	StagedOnly bool
+
+	// KeepIndex stashes the changes but leaves the index as it was, so a
+	// staged-up commit can still be made afterwards.
+	KeepIndex bool
+
+	// Paths narrows the stash to these paths. Untracked files among them are
+	// included whatever Untracked says: git takes the pathspec as the answer.
+	Paths []string
+}
+
+// StashPush sets changes aside.
+func (r *Repo) StashPush(ctx context.Context, opts StashOpts) error {
+	args := []string{"stash", "push"}
+	switch {
+	case opts.StagedOnly:
+		args = append(args, "--staged")
+	case opts.Untracked:
+		args = append(args, "--include-untracked")
+	}
+	if opts.KeepIndex && !opts.StagedOnly {
+		args = append(args, "--keep-index")
+	}
+	if opts.Message != "" {
+		args = append(args, "--message", opts.Message)
+	}
+	if len(opts.Paths) > 0 {
+		args = append(args, "--")
+		args = append(args, opts.Paths...)
 	}
 	_, err := r.run(ctx, args...)
 	return err
@@ -269,4 +342,49 @@ func (r *Repo) StashDrop(ctx context.Context, ref string) error {
 func (r *Repo) HeadMessage(ctx context.Context) (string, error) {
 	out, err := r.run(ctx, "log", "-1", "--format=%B")
 	return strings.TrimSpace(out), err
+}
+
+// GitDir is the repository's administrative directory, as an absolute path. It
+// is asked for rather than assumed to be .git: in a worktree that name is a
+// file pointing elsewhere.
+func (r *Repo) GitDir(ctx context.Context) (string, error) {
+	out, err := r.run(ctx, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// CommitTemplate is the contents of the file commit.template names, empty when
+// none is configured or it cannot be read. A repository that ships one expects
+// every commit to start from it.
+func (r *Repo) CommitTemplate(ctx context.Context) string {
+	path, err := r.run(ctx, "config", "--get", "commit.template")
+	if err != nil {
+		return ""
+	}
+	path = expandHome(strings.TrimSpace(path))
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(r.Path, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// expandHome resolves the leading ~ git allows in a configured path.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
 }

@@ -163,7 +163,7 @@ func TestUndoCommitKeepsWhatTheCommitHeld(t *testing.T) {
 	if err := repo.StageAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "work"); err != nil {
+	if err := repo.Commit(ctx, "work", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.UndoCommit(ctx); err != nil {
@@ -190,7 +190,7 @@ func TestCreateBranchAtStartsFromTheNamedCommit(t *testing.T) {
 	if err := repo.StageAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "second"); err != nil {
+	if err := repo.Commit(ctx, "second", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	commits, err := repo.Log(ctx, 5)
@@ -222,7 +222,7 @@ func TestFileLogListsOnlyTheCommitsThatTouchedThePath(t *testing.T) {
 	if err := repo.Stage(ctx, "other.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Commit(ctx, "unrelated"); err != nil {
+	if err := repo.Commit(ctx, "unrelated", CommitOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
