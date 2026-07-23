@@ -1,0 +1,4 @@
+# gofmt wants LF, and it is checked on every platform the tests run on.
+# Without this the Windows checkout converts to CRLF and every file in the
+# repository reads back as unformatted.
+* text=auto eol=lf

@@ -1,0 +1,68 @@
+name: release
+
+# Tagging v* publishes the binaries. The whole point of a Go rewrite is that
+# users get one file and no runtime; without this they would need a Go
+# toolchain to obtain it, which gives the advantage away.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # creating the release and uploading its assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: darwin, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: amd64 }
+          - { goos: windows, goarch: amd64, ext: .exe }
+          - { goos: windows, goarch: arm64, ext: .exe }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # CGO off so the binary is static and runs on any libc.
+          CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          name="git-gui_${GOOS}_${GOARCH}${EXT}"
+          # -s -w drop the symbol table and DWARF: about a third of the size,
+          # and a TUI is not debugged from a user's core dump anyway.
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "dist/${name}" ./cmd/git-gui
+          (cd dist && sha256sum "${name}" > "${name}.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --generate-notes

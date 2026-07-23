@@ -1,0 +1,5 @@
+# The built binary, anchored to the repository root. Without the leading
+# slash this pattern also matches the cmd/git-gui/ directory, which quietly
+# keeps package main out of the repository — a clone that cannot build.
+/git-gui
+/dist/

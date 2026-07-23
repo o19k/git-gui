@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The tests drive a real git binary in a temporary repository, so they have
+    # to run on every platform the tool claims to support rather than on Linux
+    # alone: path handling and git's own defaults differ.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        # gofmt exits 0 whatever it finds, so its output is the signal.
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - run: go vet ./...
+
+      # -race because the snapshot loader runs six git calls concurrently and
+      # writes their results into one struct.
+      - run: go test -race -timeout 10m ./...
