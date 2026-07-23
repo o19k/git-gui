@@ -23,7 +23,10 @@ const (
 // and h are outer dimensions; content is fitted to the interior exactly.
 func renderBox(title string, lines []string, w, h int, focused bool) string {
 	if w < 4 || h < 2 {
-		return ""
+		// Too small to frame, but the space is still the pane's: fill it with
+		// exactly h blank rows of w columns so the panes around it keep their
+		// places instead of collapsing and tearing the frame.
+		return blankBox(w, h)
 	}
 	inner := w - 2
 	innerH := h - 2
@@ -59,6 +62,20 @@ func renderBox(title string, lines []string, w, h int, focused bool) string {
 	bottom := border.Render(bottomLeft + strings.Repeat(horizontal, inner) + bottomRight)
 
 	return strings.Join(append(append([]string{top}, body...), bottom), "\n")
+}
+
+// blankBox is h rows of w spaces: the placeholder for a pane too small to
+// frame, holding the exact rectangle so neighbours do not shift.
+func blankBox(w, h int) string {
+	if h <= 0 {
+		return ""
+	}
+	row := strings.Repeat(" ", max(w, 0))
+	rows := make([]string, h)
+	for i := range rows {
+		rows[i] = row
+	}
+	return strings.Join(rows, "\n")
 }
 
 // fitLine pads or truncates a possibly-styled line to exactly w columns.

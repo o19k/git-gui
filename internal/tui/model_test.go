@@ -205,6 +205,33 @@ func TestShortTerminalKeepsEveryPanelFramed(t *testing.T) {
 	}
 }
 
+func TestEveryTabFillsShortTerminalsExactly(t *testing.T) {
+	// Stacked tabs (Log, Stash, Explorer) once summed their panes past the
+	// body's height, overflowing the terminal and stranding the old frame.
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 40, Height: 3}, {Width: 80, Height: 5}, {Width: 100, Height: 8},
+		{Width: 100, Height: 12}, {Width: 60, Height: 4},
+	} {
+		m := fixture(t)
+		next, _ := m.Update(size)
+		m = next.(Model)
+		for tab := range tabCount {
+			opened, _ := m.openTab(Tab(tab))
+			tabbed := opened.(Model)
+
+			lines := strings.Split(tabbed.View(), "\n")
+			if len(lines) != size.Height {
+				t.Errorf("tab %d at %dx%d: view is %d lines", tab, size.Width, size.Height, len(lines))
+			}
+			for i, line := range lines {
+				if w := lipgloss.Width(line); w != size.Width {
+					t.Errorf("tab %d at %dx%d line %d: %d columns", tab, size.Width, size.Height, i, w)
+				}
+			}
+		}
+	}
+}
+
 func TestNumberKeysOpenTabs(t *testing.T) {
 	m := fixture(t)
 	for i, k := range []string{"2", "3", "1"} {

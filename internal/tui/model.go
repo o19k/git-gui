@@ -852,20 +852,45 @@ func (m Model) paneHeight(p Panel) int {
 }
 
 // split apportions total by weight, giving the remainder to the last share.
+// The result always sums to exactly total: honouring a minimum that no longer
+// fits would make the panes overflow their column and tear the frame below, so
+// when even the minimum will not fit for every share the panes shrink evenly
+// instead.
 func split(total int, weights []int, minimum int) []int {
-	out := make([]int, len(weights))
-	used := 0
-	for i := range weights[:len(weights)-1] {
-		out[i] = max(total*weights[i]/100, minimum)
-		used += out[i]
+	n := len(weights)
+	out := make([]int, n)
+	if n == 0 {
+		return out
 	}
-	out[len(out)-1] = max(total-used, minimum)
+
+	// Not enough room to frame every pane at its minimum: spread what there is
+	// rather than overflowing.
+	if total < minimum*n {
+		base, rem := total/n, total%n
+		for i := range out {
+			out[i] = base
+			if n-1-i < rem { // the remainder lands on the last panes
+				out[i]++
+			}
+		}
+		return out
+	}
+
+	used := 0
+	for i := 0; i < n-1; i++ {
+		share := max(total*weights[i]/100, minimum)
+		// Never take so much that a later pane would drop below its minimum.
+		share = min(share, total-used-minimum*(n-1-i))
+		out[i] = share
+		used += share
+	}
+	out[n-1] = total - used
 	return out
 }
 
 // bodyHeight is the rows left for the panes, after the tab bar, the footer and
 // the Changes tab's banner.
-func (m Model) bodyHeight() int { return max(m.height-2-m.bannerHeight(), 1) }
+func (m Model) bodyHeight() int { return max(m.height-2-m.bannerHeight(), 0) }
 
 // bannerHeight is 1 where a banner is drawn. Only the Changes tab has one:
 // staged counts, or the stopped operation blocking everything else.
@@ -1156,7 +1181,28 @@ func (m Model) frameOnly() string {
 		rows = append(rows, m.banner())
 	}
 	rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, boxes...), m.footer())
-	return strings.Join(rows, "\n")
+
+	// A last guard against tearing: on a terminal too short even for the tab
+	// bar, banner and footer, emit exactly m.height rows so bubbletea's diff
+	// never leaves a stale line behind on the alternate screen.
+	return clampFrame(strings.Join(rows, "\n"), m.width, m.height)
+}
+
+// clampFrame forces a rendered frame to exactly h rows of w columns, cutting any
+// overflow and padding any shortfall. Overflow would push the terminal to scroll
+// and strand the top of the previous frame on screen.
+func clampFrame(frame string, w, h int) string {
+	lines := strings.Split(frame, "\n")
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	for i, line := range lines {
+		lines[i] = fitLine(line, w)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // panelTitle is the pane's border title: a count for a list, and whatever the
